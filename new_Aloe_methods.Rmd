@@ -1,0 +1,276 @@
+---
+output: github_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Methods description for Aloes paper
+
+This document describes methods used in the paper **'Aloes Horn of Africa'**. Each heading relates to sections in the manuscript. See [Aloes_Horn_Diversity](https://github.com/stevenpbachman/Aloes_Horn_Diversity) for raw data and related documents.
+
+
+### Libraries
+
+```{r, message=FALSE}
+library(dplyr)
+library(tidyr)
+library(readr)
+library(ggplot2)
+library(rgdal)
+library(maptools)
+library(sp)
+library(rgeos)
+library(sf)
+library(rredlist)
+```
+
+### 1. Histogram of specimen collections 
+
+*Aloe occurrence data*
+
+Specimen data were derived from a database of collections from herbaria including ETH, K, EA, UPS, PRE, and some from FT and other institutions. The taxonomic treatments were verified by one of us (Demissew).
+Occurrence data were submitted to the IUCN Red List as supporting information for the global Red List assessments. 
+
+Occurrence data were queried from the [IUCN Red List](https://www.iucnredlist.org/) using the Advanced query and the following filters:
+
+Taxonomy: Genus = Aloe
+Land Regions: Country = Djibouti, Eritrea, Ethiopia, Somalia, South Sudan, Sudan 
+
+```{r echo=TRUE, message = FALSE, warning=FALSE}
+# import specimens
+specimens_all<- read_csv("01_data/Aloe_points_csv.csv")
+
+# add extra range data for two species that didn't have point data
+specimens_extra = read_csv("01_data/Aloe_points_extra.csv")
+
+# merge to get full dataset
+all_occs = rbind(specimens_all,specimens_extra)
+
+# find unique records (species) and count number of occurrences per species
+spec_count = specimens_all %>% group_by(binomial) %>% count()
+
+# plot as histogram and show mean
+ggplot(spec_count, aes(x = n)) + 
+geom_histogram(color = 'darkgray', fill = 'white', binwidth = 2) +
+labs(x = 'Number of occurrence records', y = 'Count of species') +
+geom_vline(aes(xintercept = mean(spec_count$n, na.rm = TRUE), show.legend = FALSE)) +
+scale_x_continuous(breaks = c(10, 20, 30, 40, 50, 60))
+
+# save down the plot
+path = getwd()
+ggsave(paste0(path,"/03_figs/fig_1.png"), width = 10)
+
+# calculate the mean number of occurrences per species
+spec_mean = mean(spec_count$n)
+
+```
+
+### 2. Study area – show all points, and show study region countries where species are from.
+
+Done in arcmap - explain
+
+### 3. Aloe Red List assessment data - summarise categories and threat data:
+
+Red List assessment data were queried from the [IUCN Red List](https://www.iucnredlist.org/) using the Advanced query and the following filters:
+
+Taxonomy: Genus = Aloe
+Land Regions: Country = Djibouti, Eritrea, Ethiopia, Somalia, South Sudan, Sudan 
+
+The following tables were downloaded:
+assessments: Species ID and Red List category
+taxonomy: Species ID and taxonomic information (linked by species ID)
+
+```{r echo=TRUE, message = FALSE, warning=FALSE}
+# import data
+assessments = read_csv("01_data/IUCN_downloads/assessments.csv")
+taxonomy = read_csv("01_data/IUCN_downloads/taxonomy.csv")
+
+# get single file with names and ratings
+sp_ratings = merge(assessments, taxonomy, by = "internalTaxonId")
+
+# update points with Red List Rating
+colnames(all_occs)[which(names(all_occs) == "id_no")] = "internalTaxonId"
+all_occs_rating = merge(all_occs, sp_ratings, by = "internalTaxonId")
+```
+
+*Summary of final Red List assessment ratings*
+
+Replicate method to calculate table of red list results, % threatened etc. 
+Table 2. in old manuscript
+Check methods for tidy tables in R
+
+
+### 4. Show results of Red List threats
+
+Downlod this using the IDs?
+Dig out loop from old red list code
+
+```{r eval = FALSE,echo=TRUE, message = FALSE, warning=FALSE}
+#RL_ids = sp_ratings$internalTaxonId
+
+#rlkey = "302e9f949b7c1f3dcc3e1fe64e34e4ee732bdca390f9a09fb76ee8c30ec83124"
+
+#test = rl_threats(id = 30747, key = rlkey)
+#test$result
+```
+
+### 5. Growth of PAs across Horn of Africa and Aloe ranges
+
+Use WDPA points to generate buffer - use to get max PA area per year later
+
+5a. Use WDPA polys to get minimum PA area per year
+
+```{r eval = FALSE, echo=TRUE, message = FALSE, warning=FALSE}
+# read in all the PA points data
+PA_polys = st_read("01_data/WDPA_polys_Nov_2018.shp")
+
+# remove those that have no designation status
+PA_polys_des = subset(PA_polys, STATUS == "Designated")
+
+# reduce down to something more manageable - filter on countries where points occur
+# use ISO code to filter
+
+PA_poly_sub = subset(PA_polys_des, ISO3 == "BFA" |
+                       ISO3 == "COD"|
+                       ISO3 == "DJI"|
+                       ISO3 == "ERI"|
+                       ISO3 == "ETH"|
+                       ISO3 == "KEN"|
+                       ISO3 == "NGA"|
+                       ISO3 == "SOM"|
+                       ISO3 == "SSD"|
+                       ISO3 == "SDN"|
+                       ISO3 == "TZA"|
+                       ISO3 == "TGO"|
+                       ISO3 == "UGA"
+                     )
+                     
+# included points must have a year and an area
+includedpol = subset(PA_poly_sub, REP_AREA > "0")
+includedpol = subset(includedpol, STATUS_YR > "0")
+
+# now set the projection
+included_prj_pol = includedpol %>% st_transform(102022)
+
+# get the unique years to feed into the loop later
+uniqueyears = unique(included_prj_pol$STATUS_YR)
+
+# for loop that pulls out each year in dataset
+
+# writes to file
+for (i in uniqueyears){
+  PA = subset(included_prj_pol,included_prj_pol$STATUS_YR <= i) # query shape year 
+  PA_union = st_union(PA, by_feature = FALSE) # dissolves polys
+  PA_path = paste0("poly_", i, ".shp")
+  write_sf(PA_union, PA_path, driver="ESRI Shapefile")
+}
+```
+
+
+
+### 5b. add points and buffer, then merge with existing PA polys (a) to get maximum PA area 
+
+```{r eval = FALSE, echo=TRUE, message = FALSE, warning=FALSE}
+# read in all the PA points data
+PA_points = sf::read_sf("01_data/WDPA_points_Nov_2018.shp")
+
+# remove those that have no designation status
+PA_points_des = subset(PA_points, STATUS == "Designated")
+
+# reduce down to something more manageable - filter on countries where points occur
+# use ISO code to filter
+
+PA_point_sub = subset(PA_points_des, ISO3 == "BFA" |
+                       ISO3 == "COD"|
+                       ISO3 == "DJI"|
+                       ISO3 == "ERI"|
+                       ISO3 == "ETH"|
+                       ISO3 == "KEN"|
+                       ISO3 == "NGA"|
+                       ISO3 == "SOM"|
+                       ISO3 == "SSD"|
+                       ISO3 == "SDN"|
+                       ISO3 == "TZA"|
+                       ISO3 == "TGO"|
+                       ISO3 == "UGA"
+                     )
+
+# included points must have a year and an area
+includedpoints = subset(PA_point_sub, REP_AREA > "0")
+includedpoints = subset(includedpoints, STATUS_YR > "0")
+
+# now set the projection
+included_prj_points = includedpoints %>% st_transform(102022)
+
+# get the unique years to feed into the loop later
+uniqueyears_points = unique(included_prj_points$STATUS_YR)
+
+# combine the unique years for points and polys (could be different)
+years = c(uniqueyears,uniqueyears_points )
+
+# combine points and polys in the same for loop
+
+for (i in years){
+
+  # for polys - query on year and union
+  PA = subset(included_prj_pol,included_prj_pol$STATUS_YR <= i) # query poly shape year 
+  PA_union = st_union(PA, by_feature = FALSE)
+  
+  # for points - query on year, then buffer and union
+  PA_points = subset(included_prj_points,included_prj_points$STATUS_YR <= i) # query point shape year 
+  PA_point_buff = st_buffer(PA_points, dist=sqrt(PA_points$REP_AREA/pi)*1000)
+  PA_point_buff_union = st_union(PA_point_buff, by_feature = FALSE)
+
+  # combine features
+  comb = st_union(PA_union,  PA_point_buff_union , by_feature = FALSE)
+
+  # save them down
+  PA_path = paste0("comb_", i, ".shp")
+  write_sf( comb, PA_path, driver="ESRI Shapefile")
+}
+```
+
+### 6.REPRESENTATION- Using 2km (5 and 10) buffers, chart the number of species that have at least part of range (>= 2km2 protected)
+
+```{r echo=TRUE, message = FALSE, warning=FALSE}
+
+# read in all the occurrence data
+occ_sf = sf::st_as_sf(all_occs_rating, coords = c("longitude","latitude"), crs = 4326)
+
+# project to equal area
+occ_sf_prj = occ_sf %>% st_transform(102022)
+
+# buffer points 2km
+buff_2km = st_buffer(occ_sf_prj, dist=2000)
+
+# save it down for use in Arcmap
+PA_path = paste0("buff_2km", ".shp")
+write_sf(buff_2km, PA_path, driver="ESRI Shapefile")
+
+```
+
+Open in ArcMap
+Dissolve on 'binomial' field so that you have single shape for each species
+Set statistics field as 'RedListCategory' and statistic as 'first' so that you can query this later
+Run intersect tool (default settings) on Minimum PA layer to get PA and Aloe range overlap
+
+
+Now get the count of species per year
+
+```{r echo=TRUE, message = FALSE, warning=FALSE}
+### Count of species that have part of range protected (more than 2km?)
+
+# take the intersected data (species with some area protected) and group by species name
+int_area = min_2km_intersect_out %>% group_by(binomial) 
+
+# count number of species by year
+count_sp = int_area %>% group_by(FID_1) %>% summarise(count = n_distinct(binomial))
+
+# write the file for charting
+path = getwd()
+write.csv(count_sp, paste0(path,"/04_outputs/sp_per_year_min_2km.csv"))
+```
+
+
