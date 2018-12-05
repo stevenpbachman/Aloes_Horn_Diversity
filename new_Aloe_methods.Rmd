@@ -49,7 +49,7 @@ specimens_extra = read_csv("01_data/Aloe_points_extra.csv")
 all_occs = rbind(specimens_all,specimens_extra)
 
 # find unique records (species) and count number of occurrences per species
-spec_count = specimens_all %>% group_by(binomial) %>% count()
+spec_count = all_occs %>% group_by(binomial) %>% count()
 
 # plot as histogram and show mean
 ggplot(spec_count, aes(x = n)) + 
@@ -244,17 +244,24 @@ occ_sf_prj = occ_sf %>% st_transform(102022)
 
 # buffer points 2km
 buff_2km = st_buffer(occ_sf_prj, dist=2000)
+buff_5km = st_buffer(occ_sf_prj, dist=5000)
+buff_10km = st_buffer(occ_sf_prj, dist=10000)
+buff_20km = st_buffer(occ_sf_prj, dist=20000)
 
 # save it down for use in Arcmap
-PA_path = paste0("buff_2km", ".shp")
-write_sf(buff_2km, PA_path, driver="ESRI Shapefile")
+write_sf(buff_2km, "buff_2km.shp", driver="ESRI Shapefile")
+write_sf(buff_5km, "buff_5km.shp", driver="ESRI Shapefile")
+write_sf(buff_10km, "buff_10km.shp", driver="ESRI Shapefile")
+write_sf(buff_20km, "buff_20km.shp", driver="ESRI Shapefile")
 
 ```
 
 Open in ArcMap
-Dissolve on 'binomial' field so that you have single shape for each species
-Set statistics field as 'RedListCategory' and statistic as 'first' so that you can query this later
-Run intersect tool (default settings) on Minimum PA layer to get PA and Aloe range overlap
+*Dissolve on 'binomial' field so that you have single shape for each species
+*Set statistics field as 'RedListCategory' and statistic as 'first' so that you can query this later
+*Run intersect tool (default settings) on Minimum PA layer to get PA and Aloe range overlap
+*Add area
+*Save the output
 
 
 Now get the count of species per year
@@ -262,15 +269,270 @@ Now get the count of species per year
 ```{r echo=TRUE, message = FALSE, warning=FALSE}
 ### Count of species that have part of range protected (more than 2km?)
 
-# take the intersected data (species with some area protected) and group by species name
-int_area = min_2km_intersect_out %>% group_by(binomial) 
+# change this to a function
 
-# count number of species by year
-count_sp = int_area %>% group_by(FID_1) %>% summarise(count = n_distinct(binomial))
+int_area2km = read.csv("04_outputs/min_2km_intersect.csv")
+int_area5km = read.csv("04_outputs/min_5km_intersect_out.csv")
+int_area10km = read.csv("04_outputs/min_10km_intersect_out.csv")
+int_area20km = read.csv("04_outputs/min_20km_intersect_out.csv")
 
-# write the file for charting
-path = getwd()
-write.csv(count_sp, paste0(path,"/04_outputs/sp_per_year_min_2km.csv"))
+# funciton to take intersect and count unique species
+count_sp_buff = function(buff, fname){
+  
+  # take the intersected data (species with some area protected) and group by species name
+  int_area = buff %>% group_by(binomil) 
+  
+  # count number of species by year
+  count_sp = int_area %>% group_by(FID_1) %>% summarise(count = n_distinct(binomil))
+  
+  # write the file for charting
+  path = getwd()
+  write.csv(count_sp, paste0(path,"/04_outputs/",fname,".csv"))
+  
+}
+
+sp_count_2km = count_sp_buff(int_area2km, fname = "2km_buff_sp_count")
+sp_count_5km = count_sp_buff(int_area5km, fname = "5km_buff_sp_count")
+sp_count_10km = count_sp_buff(int_area10km, fname = "10km_buff_sp_count")
+sp_count_20km = count_sp_buff(int_area20km, fname = "20km_buff_sp_count")
+
+# merge these data and plot them up - ggplot line?
+
+
+
+
+##########################################
+# now for only the threatened species
+
+thr_int_area2km = int_area2km
+thr_int_area5km = int_area5km
+thr_int_area10km = int_area10km
+thr_int_area20km = int_area20km
+
+count_thr_sp_buff = function(buff, fname){
+  
+  # query out threatened species only
+  threat_int_area = subset(buff, FIRST_rdls == "Critically Endangered"  |
+                           FIRST_rdls == "Endangered" |
+                           FIRST_rdls == "Vulnerable"
+                           )
+  
+  # take the intersected data (species with some area protected) and group by species name
+  int_area = threat_int_area %>% group_by(binomil) 
+  
+  # count number of species by year
+  count_sp = int_area %>% group_by(FID_1) %>% summarise(count = n_distinct(binomil))
+  
+  # write the file for charting
+  path = getwd()
+  write.csv(count_sp, paste0(path,"/04_outputs/",fname,".csv"))
+  
+}
+
+thr_sp_count_2km = count_thr_sp_buff(thr_int_area2km, fname = "2km_buff_thr_sp_count")
+thr_sp_count_5km = count_thr_sp_buff(thr_int_area5km, fname = "5km_buff_thr_sp_count")
+thr_sp_count_10km = count_thr_sp_buff(thr_int_area10km, fname = "10km_buff_thr_sp_count")
+thr_sp_count_20km = count_thr_sp_buff(thr_int_area20km, fname = "20km_buff_thr_sp_count")
+
+
 ```
 
 
+```{r echo=TRUE, message = FALSE, warning=FALSE}
+### 6b Butchart chart. find the % of the range that is protected - then count how many are above/below target thresholds
+
+# combine the year and species name
+binom_year = tidyr::unite(int_area2km, binomil, FID_1, col = "comb", remove = FALSE)
+
+# get sum of area by binom/year combination
+comb_area = binom_year %>% group_by(comb) %>% summarise(sum = sum(new_area))
+
+# now separate year and binomial
+comb_area_yr = tidyr::separate(comb_area, comb, into = c("name", "year"), sep = "_")
+
+# add total range size for each species
+tot_area2km = read.csv("04_outputs/2km_buff_sp_area.csv")
+
+# merge protected intersect area with total area to work out %
+colnames(tot_area2km)[which(names(tot_area2km) == "binomil")] = "name"
+all_area_2km = merge(tot_area2km, comb_area_yr, by = "name")
+
+# now get the proporiton of each species that is protected, for each year
+all_area_2km$prop = all_area_2km$sum/all_area_2km$Sum_Area
+
+# subset on species hitting x% (area of range protected) target
+all_area_2km_0_2percent = subset(all_area_2km, prop < 0.2)
+all_area_2km_0_2percent = all_area_2km_0_2percent %>% group_by(year) %>% summarise(count =  n_distinct(name))
+
+all_area_2km_2_49percent = subset(all_area_2km, prop >= 0.2 & prop < 0.499)
+all_area_2km_2_49percent = all_area_2km_2_49percent %>% group_by(year) %>% summarise(count =  n_distinct(name))
+
+all_area_2km_50_100percent = subset(all_area_2km, prop >= 0.50)
+all_area_2km_50_100percent = all_area_2km_50_100percent %>% group_by(year) %>% summarise(count =  n_distinct(name))
+
+# save them down
+write.csv(all_area_2km_0_2percent, paste0(path,"/04_outputs/all_area_2km_0_2percent.csv"))
+write.csv(all_area_2km_2_49percent, paste0(path,"/04_outputs/all_area_2km_2_49percent.csv"))
+write.csv(all_area_2km_50_100percent, paste0(path,"/04_outputs/all_area_2km_50_100percent.csv"))
+
+#################### SAME FOR THREATENED SP ################
+### 6b Butchart chart. find the % of the range that is protected - then count how many are above/below target thresholds
+
+# query out the threatened sp.
+# query out threatened species only
+threat_int_area2km = subset(int_area2km, FIRST_rdls == "Critically Endangered"  |
+                           FIRST_rdls == "Endangered" |
+                           FIRST_rdls == "Vulnerable"
+                           )
+
+# combine the year and species name
+binom_year = tidyr::unite(threat_int_area2km, binomil, FID_1, col = "comb", remove = FALSE)
+
+# get sum of area by binom/year combination
+comb_area = binom_year %>% group_by(comb) %>% summarise(sum = sum(new_area))
+
+# now separate year and binomial
+comb_area_yr = tidyr::separate(comb_area, comb, into = c("name", "year"), sep = "_")
+
+# add total range size for each species
+tot_area2km = read.csv("04_outputs/2km_buff_sp_area.csv")
+
+# merge protected intersect area with total area to work out %
+colnames(tot_area2km)[which(names(tot_area2km) == "binomil")] = "name"
+all_area_2km = merge(tot_area2km, comb_area_yr, by = "name")
+
+# now get the proporiton of each species that is protected, for each year
+all_area_2km$prop = all_area_2km$sum/all_area_2km$Sum_Area
+
+# subset on species hitting x% (area of range protected) target
+all_area_2km_0_2percent_thr = subset(all_area_2km, prop < 0.2)
+all_area_2km_0_2percent_thr = all_area_2km_0_2percent_thr %>% group_by(year) %>% summarise(count =  n_distinct(name))
+
+all_area_2km_2_49percent_thr = subset(all_area_2km, prop >= 0.2 & prop < 0.499)
+all_area_2km_2_49percent_thr = all_area_2km_2_49percent_thr %>% group_by(year) %>% summarise(count =  n_distinct(name))
+
+all_area_2km_50_100percent_thr = subset(all_area_2km, prop >= 0.50)
+all_area_2km_50_100percent_thr = all_area_2km_50_100percent_thr %>% group_by(year) %>% summarise(count =  n_distinct(name))
+
+# save them down
+write.csv(all_area_2km_0_2percent_thr, paste0(path,"/04_outputs/all_area_2km_0_2percent_thr.csv"))
+write.csv(all_area_2km_2_49percent_thr, paste0(path,"/04_outputs/all_area_2km_2_49percent_thr.csv"))
+write.csv(all_area_2km_50_100percent_thr, paste0(path,"/04_outputs/all_area_2km_50_100percent_thr.csv"))
+```
+
+### 8. How could PAs be extended in a way that incurs minimal area, but maximum coverage of (threatened) species
+
+```{r echo=TRUE, message = FALSE, warning=FALSE}
+
+points_vs_sites = read.csv("04_outputs/Greedy/species_by_sites.txt")
+
+# filter out species already protected
+basic = subset(points_vs_sites, protected != "alreadyPA")
+
+
+testing = greedy(points_vs_sites)
+
+repeated = (replicate(5, greedy(basic)))
+repeat_df = as.data.frame(do.call(rbind,repeated))
+
+sub_repeat = subset(repeat_df, select = c("V2","V3","V4","V5","V6","V7","V8","V9","V10"))
+
+df_freq = names(which.max(table(sub_repeat$V2)))
+
+
+sites_species = points_vs_sites
+
+# make the function to get sp max and remove from list until you get to 0
+# provides a ranking
+greedy = function(sites_species){
+  
+  # some kind of counter to check when you are down to no more rows in the table
+  
+  testcount = nrow(sites_species)
+  
+  res.all = data.frame(max = "", area = "", stringsAsFactors = FALSE)
+  
+  while ((testcount)>'0'){
+  # count species per site
+  max_sp_site = sites_species %>% 
+    group_by(Id) %>% 
+    summarise(count =  n_distinct(binomial)) %>% 
+    filter(count == max(count)) %>%
+    select(Id) %>%
+    sample_n(1) # when there is a tie, it adds a random selection, so not every run is the same
+  
+  max_sp_site = as.character(max_sp_site)
+  print(max_sp_site)
+  
+  # get the list of species at that site
+  max_species = subset(sites_species, Id == max_sp_site) %>% group_by(binomial) %>% count(binomial) 
+  
+  # make a list to feed into the filter
+  max_sp_list = as.list(max_species)
+  #print(max_sp_list)
+  
+  # subset these species from the base list
+  sp_site_sub = sites_species %>% filter(!binomial %in% max_sp_list$binomial)
+  
+  # subset to remove site, if not already removed
+  new_sites_species = sp_site_sub %>% filter(Id != max_sp_site) # CHECK THIS>>>>
+  
+  # now get the area for the site
+  max_area = subset(sites_species, Id == max_sp_site, select = buff_area)
+  max_area = max_area %>% filter(row_number(buff_area)==1) 
+  colnames(max_area)[which(names( max_area) == "buff_area")] = "area"
+  max_area = as.character(max_area)
+  print(max_area)
+  
+  res = data.frame(max = max_sp_site, area = max_area, stringsAsFactors = FALSE)
+  res.all = bind_rows(res.all,res)
+  
+  testcount = nrow(new_sites_species)
+  
+  # stop running when area doesn't increase after x runs
+  
+  }
+
+  return(res.all)
+}
+
+```
+
+
+```{r echo=TRUE, message = FALSE, warning=FALSE}
+BGCI.Plants <- read.csv("01_data/BGCI_Plant_Search/BGCI-Plants.csv")
+
+Sp_list <- spec_count
+
+# separate binomial
+Sp_list = separate(Sp_list, binomial, c("genus", "Species"), sep = " ")
+
+# now merge
+Sp_list_merge = merge(Sp_list, BGCI.Plants, by = "Species")
+
+# tidy up
+BGCI_tidy = subset(Sp_list_merge, Genus.Hybrid == "" & 
+                     Species.Hybrid == "" &
+                     Infraspecific.Rank == "" &
+                     Infraspecific.Epithet == "" &
+                     Cultivar == "", 
+                   select = c(Genus, Species,No..of.ex.situ.sites.worldwide,IUCN.Red.List ))
+
+# group by threatened or not threatened
+BGCI_tidy = mutate(BGCI_tidy, Threat.Stat = case_when(IUCN.Red.List == "Least Concern" ~ "Not threatened",
+                                                      IUCN.Red.List == "Near Threatened" ~ "Not threatened",
+                                                      IUCN.Red.List == "Endangered" ~ "Threatened",
+                                                      IUCN.Red.List == "Critically Endangered" ~ "Threatened",
+                                                      IUCN.Red.List == "Vulnerable" ~ "Threatened",
+                                                      IUCN.Red.List == "Data Deficient" ~ "Data Deficient")) 
+
+# box plot? and stat test
+boxplot(No..of.ex.situ.sites.worldwide~Threat.Stat,data=BGCI_tidy, main="threat stat vs bot garden colls", 
+  	xlab="threat status", ylab="number of botanical gardens collections per species")
+
+
+BGCI_tidy_count = BGCI_tidy %>% group_by(Threat.Stat) %>% summarise(n = n())
+
+# write it down
+write.csv(Sp_list_merge, paste0("BGCI.csv"))
+```
