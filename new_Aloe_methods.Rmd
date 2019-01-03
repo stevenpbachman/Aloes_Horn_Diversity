@@ -14,6 +14,7 @@ This document describes methods used in the paper **'Aloes Horn of Africa'**. Ea
 ### Libraries
 
 ```{r, message=FALSE}
+#library(plyr)
 library(dplyr)
 library(tidyr)
 library(readr)
@@ -24,6 +25,8 @@ library(sp)
 library(rgeos)
 library(sf)
 library(rredlist)
+library(data.table)
+
 ```
 
 ### 1. Histogram of specimen collections 
@@ -101,10 +104,14 @@ Replicate method to calculate table of red list results, % threatened etc.
 Table 2. in old manuscript
 Check methods for tidy tables in R
 
+```{r echo=TRUE, message = FALSE, warning=FALSE}
 
+
+
+```
 ### 4. Show results of Red List threats
 
-Downlod this using the IDs?
+Download this using the IDs?
 Dig out loop from old red list code
 
 ```{r eval = FALSE,echo=TRUE, message = FALSE, warning=FALSE}
@@ -426,22 +433,63 @@ write.csv(all_area_2km_50_100percent_thr, paste0(path,"/04_outputs/all_area_2km_
 
 points_vs_sites = read.csv("04_outputs/Greedy/species_by_sites.txt")
 
-# filter out species already protected
-basic = subset(points_vs_sites, protected != "alreadyPA")
+# filter out species already protected - not just single occs protected, we need to take out the whole species
+# get the species list
+protected_sp = points_vs_sites %>% 
+    filter(protected == "alreadyPA") #%>%
 
+sp_list = as.character(unique(protected_sp$binomial))
 
-testing = greedy(points_vs_sites)
+# subset these species from the base list
+basic = points_vs_sites %>% filter(!binomial %in% sp_list)
 
-repeated = (replicate(5, greedy(basic)))
-repeat_df = as.data.frame(do.call(rbind,repeated))
+# single run of algorithm - for testing
+single = greedy(basic)
 
-sub_repeat = subset(repeat_df, select = c("V2","V3","V4","V5","V6","V7","V8","V9","V10"))
+# run algorithm x times using replicate - outputs not rectangluar!
+# sink 
+t = proc.time()
+sink("gather.txt") # gathers print output
+repeated = (replicate(1000, greedy(basic)))
+dt = rbindlist(lapply(repeated, function(x) data.table(t(x))), fill = TRUE) # thanks to >> https://stackoverflow.com/questions/15201305/how-to-convert-a-list-consisting-of-vector-of-different-lengths-to-a-usable-data
+# uses transpost and the fills missing data with NA using fill = TRUE
+proc.time()- t
+sink()
 
-df_freq = names(which.max(table(sub_repeat$V2)))
+write.csv(dt, paste0(path,"/04_outputs/repeat_df_final1000.csv"))
 
+# same again, but for threatened species only
+points_vs_sites2 = read.csv("04_outputs/Greedy/species_by_sites2.txt")
 
-sites_species = points_vs_sites
+# subset for threatened only
+threat_sp= subset(points_vs_sites2, rating == "Critically Endangered"  |
+                           rating == "Endangered" |
+                           rating == "Vulnerable" |
+                           rating == "Data Deficient"
+                           )
 
+# now take out the species already protected
+# get the species list
+protected_thr_sp = threat_sp %>% 
+    filter(protected == "alreadyPA") #%>%
+
+sp_list = as.character(unique(protected_thr_sp$binomial))
+
+# subset these species from the base list
+basic_thr = threat_sp %>% filter(!binomial %in% sp_list)
+
+# now run the greedy algorithm
+t = proc.time()
+sink("gather.txt") # gathers print output
+repeated = (replicate(1000, greedy(basic_thr)))
+dt = rbindlist(lapply(repeated, function(x) data.table(t(x))), fill = TRUE) # thanks to >> https://stackoverflow.com/questions/15201305/how-to-convert-a-list-consisting-of-vector-of-different-lengths-to-a-usable-data
+# uses transpost and the fills missing data with NA using fill = TRUE
+proc.time()- t
+sink()
+
+write.csv(dt, paste0(path,"/04_outputs/repeat_df_final1000_thr_sp.csv"))
+
+############## FUNCTION #############
 # make the function to get sp max and remove from list until you get to 0
 # provides a ranking
 greedy = function(sites_species){
@@ -450,8 +498,13 @@ greedy = function(sites_species){
   
   testcount = nrow(sites_species)
   
-  res.all = data.frame(max = "", area = "", stringsAsFactors = FALSE)
+  dummy_max = "0"
+  dummy_area = "0"
+  res.all = data.frame(max = dummy_max, area = as.numeric(dummy_area), stringsAsFactors = FALSE)
   
+  dummy_comb = "0"
+  comb_area = data.frame(comb_area = as.numeric(dummy_comb), stringsAsFactors = FALSE)
+
   while ((testcount)>'0'){
   # count species per site
   max_sp_site = sites_species %>% 
@@ -462,7 +515,7 @@ greedy = function(sites_species){
     sample_n(1) # when there is a tie, it adds a random selection, so not every run is the same
   
   max_sp_site = as.character(max_sp_site)
-  print(max_sp_site)
+  #print(max_sp_site)
   
   # get the list of species at that site
   max_species = subset(sites_species, Id == max_sp_site) %>% group_by(binomial) %>% count(binomial) 
@@ -480,26 +533,55 @@ greedy = function(sites_species){
   # now get the area for the site
   max_area = subset(sites_species, Id == max_sp_site, select = buff_area)
   max_area = max_area %>% filter(row_number(buff_area)==1) 
-  colnames(max_area)[which(names( max_area) == "buff_area")] = "area"
-  max_area = as.character(max_area)
-  print(max_area)
-  
+  colnames(max_area)[which(names(max_area) == "buff_area")] = "area"
+  #print(max_area)
+
   res = data.frame(max = max_sp_site, area = max_area, stringsAsFactors = FALSE)
   res.all = bind_rows(res.all,res)
   
-  testcount = nrow(new_sites_species)
-  
-  # stop running when area doesn't increase after x runs
+  sites_species = new_sites_species
+  testcount = nrow(sites_species)
   
   }
-
+  
+  res.all = res.all[-1,]
+    #str(res.all)
+  running_area = res.all %>% summarise(comb_area = sum(area))
+  #print(running_area)
+  
+  comb_area = bind_rows(comb_area,running_area)
+  comb_area = comb_area[-1,]
+  print(comb_area)
+  
+  #return(running_area)
+  
+  res.all = data.frame(Id = res.all[,-2])
+  #res.all = t(res.all)
+  
   return(res.all)
 }
 
 ```
 
+### plot the results of the iterations
 
 ```{r echo=TRUE, message = FALSE, warning=FALSE}
+
+####
+
+tidytest = gather(iterations, "run1","run2","run3","run4","run5",
+                  key = "area",value = "cases")
+tidytest = tidytest[,-2]
+
+# box plot? and stat test
+boxplot(cases~iterations,data=tidytest, main="Area (sq km) to protect all species vs # of algorithm runs to get min", xlab="runs", ylab="sq km")
+```  	
+  
+  
+  
+  	
+```{r echo=TRUE, message = FALSE, warning=FALSE}
+
 BGCI.Plants <- read.csv("01_data/BGCI_Plant_Search/BGCI-Plants.csv")
 
 Sp_list <- spec_count
@@ -536,3 +618,39 @@ BGCI_tidy_count = BGCI_tidy %>% group_by(Threat.Stat) %>% summarise(n = n())
 # write it down
 write.csv(Sp_list_merge, paste0("BGCI.csv"))
 ```
+
+
+```{r echo=TRUE, message = FALSE, warning=FALSE}
+
+# seed bank data from datra warehouse
+msb <- read.csv("01_data/MSB_seed_bank_species/msb_aloe_matches.csv")
+
+colnames(msb)[which(names(msb) == "speciesName")] = "Species"
+
+#merge to BGCI list
+msb_bgci_merge = merge(msb, BGCI_tidy, by = "Species")
+
+# replace NA with 0 
+msb_bgci_merge[is.na(msb_bgci_merge)] <- 0
+
+# add tru/false for msb collection
+msb_bgci_merge = mutate(msb_bgci_merge, collmsb = case_when(Collections.total >= "1"~ "banked",
+                                                            Collections.total == "0"~ "not banked"))
+
+# group it up
+msb_count= msb_bgci_merge %>% group_by(Threat.Stat) %>% count(collmsb)
+
+# plot 
+ggplot(msb_count, aes(fill = Threat.Stat, y = n, x = collmsb)) + 
+geom_bar(stat = "identity", position = "fill") + # to make % 
+  xlab("Seed bank status") +
+  ylab("stacked %") 
+  
+# save down the plot
+path = getwd()
+ggsave(paste0(path,"/03_figs/fig_11.png"), width = 10)
+
+# write it down
+write.csv(Sp_list_merge, paste0("BGCI.csv"))
+```
+
